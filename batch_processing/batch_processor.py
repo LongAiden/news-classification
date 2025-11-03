@@ -20,10 +20,11 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from google import generativeai as genai
+from google import genai  # Newer SDK with batch API support
+from google.genai import types as genai_types
 
 from models import ClassificationResultFromText
-from news_analyzer import NewsAnalyzer, LLM_MODEL, BATCH_LIMIT
+from news_analyzer import NewsAnalyzer, BATCH_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,8 @@ class BatchProcessor:
         self,
         gemini_key: str,
         batch_dir: str = "./batch_jobs",
-        max_batch_size: int = BATCH_LIMIT
+        max_batch_size: int = BATCH_LIMIT,
+        batch_model: str = "gemini-1.5-flash"  # Changed default to more stable 1.5-flash
     ):
         """
         Initialize batch processor.
@@ -44,19 +46,22 @@ class BatchProcessor:
             gemini_key: Google API key
             batch_dir: Directory to store batch files
             max_batch_size: Maximum URLs per batch (Gemini limit)
+            batch_model: Model to use for batch processing (gemini-1.5-flash recommended)
         """
         self.api_key = gemini_key
         self.batch_dir = Path(batch_dir)
         self.batch_dir.mkdir(exist_ok=True)
         self.max_batch_size = max_batch_size
+        self.batch_model = batch_model
 
-        # Initialize Gemini for batch API
-        genai.configure(api_key=gemini_key)
+        # Initialize Gemini Client for batch API (new SDK)
+        self.client = genai.Client(api_key=gemini_key)
 
         # NewsAnalyzer for content extraction
         self.analyzer = NewsAnalyzer(gemini_key=gemini_key)
 
         logger.info(f"✓ BatchProcessor initialized. Batch dir: {self.batch_dir}")
+        logger.info(f"✓ Using model: {self.batch_model}")
 
     async def prepare_batch_from_urls(
         self,
@@ -105,12 +110,10 @@ class BatchProcessor:
             custom_id = f"request_{idx}"
             url_mapping[custom_id] = url
 
-            # Create batch request in Gemini format
+            # Create batch request in Gemini format (Google's simplified format)
             request = {
-                "custom_id": custom_id,
-                "method": "POST",
-                "url": f"/v1/models/{LLM_MODEL}:generateContent",
-                "body": {
+                "key": custom_id,
+                "request": {
                     "contents": [
                         {
                             "role": "user",
@@ -196,12 +199,10 @@ class BatchProcessor:
             custom_id = f"request_{idx}"
             id_mapping[custom_id] = item_id
 
-            # Create batch request in Gemini format
+            # Create batch request in Gemini format (Google's simplified format)
             request = {
-                "custom_id": custom_id,
-                "method": "POST",
-                "url": f"/v1/models/{LLM_MODEL}:generateContent",
-                "body": {
+                "key": custom_id,
+                "request": {
                     "contents": [
                         {
                             "role": "user",
@@ -248,7 +249,7 @@ class BatchProcessor:
 
     def submit_batch(self, batch_file_path: str) -> str:
         """
-        Submit batch job to Google Gemini Batch API.
+        Submit batch job to Google Gemini Batch API using the new SDK.
 
         Args:
             batch_file_path: Path to the batch JSONL file
@@ -258,21 +259,24 @@ class BatchProcessor:
         """
         logger.info(f"Submitting batch job: {batch_file_path}")
 
-        # Upload batch file (specify MIME type for .jsonl files)
-        batch_file = genai.upload_file(
-            batch_file_path,
-            mime_type="application/json"  # JSONL is treated as JSON
+        # Upload batch file using new SDK (must specify MIME type for .jsonl files)
+        upload_config = genai_types.UploadFileConfig(
+            mime_type="application/json"  # JSONL files use application/json MIME type
         )
+        uploaded_file = self.client.files.upload(
+            file=batch_file_path,
+            config=upload_config
+        )
+        logger.info(f"✓ File uploaded: {uploaded_file.name}")
 
-        # Create batch job
-        model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+        # Create batch job using new SDK
+        # Use the model specified in __init__ (default: gemini-1.5-flash)
+        logger.info(f"Creating batch job with model: {self.batch_model}")
 
-        batch_job = model.batch_predict(
-            src=batch_file.uri,
-            config=genai.types.BatchPredictionConfig(
-                temperature=0.7,
-                top_p=0.95,
-            )
+        batch_job = self.client.batches.create(
+            model=self.batch_model,
+            src=uploaded_file.name,
+            config=genai_types.CreateBatchJobConfig()
         )
 
         job_id = batch_job.name
@@ -296,7 +300,7 @@ class BatchProcessor:
 
     def check_status(self, job_id: str) -> Dict:
         """
-        Check status of a batch job.
+        Check status of a batch job using new SDK.
 
         Args:
             job_id: Batch job ID
@@ -304,15 +308,15 @@ class BatchProcessor:
         Returns:
             Job status information
         """
-        batch_job = genai.BatchJob(name=job_id)
+        batch_job = self.client.batches.get(name=job_id)
 
         return {
             "job_id": job_id,
             "state": str(batch_job.state),
-            "create_time": str(batch_job.create_time),
-            "update_time": str(batch_job.update_time),
-            "completed_count": batch_job.completed_count,
-            "total_count": batch_job.total_count,
+            "create_time": str(batch_job.create_time) if hasattr(batch_job, 'create_time') else None,
+            "update_time": str(batch_job.update_time) if hasattr(batch_job, 'update_time') else None,
+            "completed_count": getattr(batch_job, 'completed_count', 0),
+            "total_count": getattr(batch_job, 'total_count', 0),
         }
 
     def wait_for_completion(
@@ -374,8 +378,8 @@ class BatchProcessor:
         """
         logger.info(f"Retrieving results for job {job_id}")
 
-        # Get batch job
-        batch_job = genai.BatchJob(name=job_id)
+        # Get batch job using new SDK
+        batch_job = self.client.batches.get(name=job_id)
 
         if batch_job.state != "JOB_STATE_SUCCEEDED":
             raise ValueError(f"Job not completed. State: {batch_job.state}")
@@ -383,13 +387,14 @@ class BatchProcessor:
         # Download results
         results_file = self.batch_dir / f"{batch_name}_results.jsonl"
 
-        # The results are in the output file
-        output_uri = batch_job.output.uri
-        logger.info(f"Downloading results from {output_uri}")
+        # Get the output file name from batch job
+        output_file_name = batch_job.output_file
+        logger.info(f"Downloading results from {output_file_name}")
 
-        # Download using genai
-        output_file = genai.get_file(output_uri)
+        # Download using new SDK
+        output_file = self.client.files.get(name=output_file_name)
 
+        # Download file content
         with open(results_file, 'wb') as f:
             f.write(output_file.read())
 
@@ -403,7 +408,7 @@ class BatchProcessor:
         with open(results_file) as f:
             for line in f:
                 result_data = json.loads(line)
-                custom_id = result_data.get("custom_id")
+                custom_id = result_data.get("key")  # Changed from "custom_id" to "key"
 
                 if "response" in result_data:
                     response_text = result_data["response"]["candidates"][0]["content"]["parts"][0]["text"]
