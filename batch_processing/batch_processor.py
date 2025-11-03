@@ -37,7 +37,7 @@ class BatchProcessor:
         gemini_key: str,
         batch_dir: str = "./batch_jobs",
         max_batch_size: int = BATCH_LIMIT,
-        batch_model: str = "gemini-1.5-flash"  # Changed default to more stable 1.5-flash
+        batch_model: str = "gemini-2.5-flash-lite"  # Changed default to more stable 1.5-flash
     ):
         """
         Initialize batch processor.
