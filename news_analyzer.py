@@ -120,17 +120,21 @@ class NewsAnalyzer:
         user_message = f"""- Title: {title}
                            - Contents: {contents}"""
 
-        response = await self.agent.run(user_message)
+        try:
+            response = await self.agent.run(user_message)
+            logger.info(f"Analyze news input: {len(contents)} characters")
+        except Exception as e:
+            logger.error(f"Error in analzing contents: {e}")
 
         result = ClassificationResultFromText(
             page_title=title,
-            is_financial=response.data.is_financial,
-            country=response.data.country,
-            sector=response.data.sector,
-            companies=response.data.companies,
-            sentiment=response.data.sentiment,
-            summary_en=response.data.summary_en,
-            summary_tr=response.data.summary_tr,
+            is_financial=response.output.is_financial,
+            country=response.output.country,
+            sector=response.output.sector,
+            companies=response.output.companies,
+            sentiment=response.output.sentiment,
+            summary_en=response.output.summary_en,
+            summary_tr=response.output.summary_tr,
             extracted_characters=len(contents or ""),
         )
 
