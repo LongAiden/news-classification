@@ -71,6 +71,46 @@ async def cmd_submit(args):
             sys.exit(1)
 
 
+def cmd_submit_contents(args):
+    """Submit a new batch job with pre-crawled content."""
+    # Load content from JSON file
+    with open(args.contents_file) as f:
+        contents = json.load(f)
+
+    print(f"📦 Submitting batch with {len(contents)} pre-crawled items...")
+
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print("Error: GOOGLE_API_KEY not set")
+        sys.exit(1)
+
+    processor = BatchProcessor(gemini_key=api_key)
+
+    # Prepare batch from contents (no URL extraction)
+    batch_file = processor.prepare_batch_from_contents(contents, args.name)
+    batch_name = Path(batch_file).stem
+
+    # Submit
+    job_id = processor.submit_batch(batch_file)
+
+    print(f"\n✓ Batch submitted successfully!")
+    print(f"  Job ID: {job_id}")
+    print(f"  Batch name: {batch_name}")
+    print(f"\nCheck status with: python batch_cli.py status {job_id}")
+
+    # Wait if requested
+    if args.wait:
+        print(f"\n⏳ Waiting for completion...")
+        success = processor.wait_for_completion(job_id, poll_interval=args.poll_interval)
+
+        if success:
+            print(f"\n✓ Batch completed!")
+            print(f"Get results with: python batch_cli.py results {job_id} {batch_name}")
+        else:
+            print(f"\n✗ Batch failed or timed out")
+            sys.exit(1)
+
+
 def cmd_status(args):
     """Check status of a batch job."""
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -227,6 +267,31 @@ def main():
         help='Polling interval in seconds (default: 60)'
     )
 
+    # Submit contents command
+    submit_contents_parser = subparsers.add_parser(
+        'submit-contents',
+        help='Submit batch with pre-crawled content (no URL extraction)'
+    )
+    submit_contents_parser.add_argument(
+        'contents_file',
+        help='JSON file with pre-crawled content (format: [{"id": "...", "title": "...", "contents": "..."}])'
+    )
+    submit_contents_parser.add_argument(
+        '--name',
+        help='Batch name (auto-generated if not provided)'
+    )
+    submit_contents_parser.add_argument(
+        '--wait',
+        action='store_true',
+        help='Wait for batch to complete'
+    )
+    submit_contents_parser.add_argument(
+        '--poll-interval',
+        type=int,
+        default=60,
+        help='Polling interval in seconds (default: 60)'
+    )
+
     # Status command
     status_parser = subparsers.add_parser('status', help='Check batch job status')
     status_parser.add_argument('job_id', help='Batch job ID')
@@ -248,6 +313,8 @@ def main():
 
     if args.command == 'submit':
         asyncio.run(cmd_submit(args))
+    elif args.command == 'submit-contents':
+        cmd_submit_contents(args)
     elif args.command == 'status':
         cmd_status(args)
     elif args.command == 'results':

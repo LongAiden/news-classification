@@ -23,7 +23,7 @@ import httpx
 from google import generativeai as genai
 
 from models import ClassificationResultFromText
-from news_analyzer import NewsAnalyzer
+from news_analyzer import NewsAnalyzer, LLM_MODEL, BATCH_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class BatchProcessor:
         self,
         gemini_key: str,
         batch_dir: str = "./batch_jobs",
-        max_batch_size: int = 1000
+        max_batch_size: int = BATCH_LIMIT
     ):
         """
         Initialize batch processor.
@@ -109,7 +109,7 @@ class BatchProcessor:
             request = {
                 "custom_id": custom_id,
                 "method": "POST",
-                "url": "/v1/models/gemini-2.0-flash:generateContent",
+                "url": f"/v1/models/{LLM_MODEL}:generateContent",
                 "body": {
                     "contents": [
                         {
@@ -155,6 +155,97 @@ class BatchProcessor:
 
         return str(batch_file)
 
+    def prepare_batch_from_contents(
+        self,
+        contents: List[Dict[str, str]],
+        batch_name: Optional[str] = None
+    ) -> str:
+        """
+        Prepare batch JSONL file from pre-crawled content (no URL extraction needed).
+
+        Args:
+            contents: List of dicts with keys 'id', 'title', 'contents'
+            batch_name: Optional name for the batch
+
+        Returns:
+            Path to the batch JSONL file
+        """
+        if len(contents) > self.max_batch_size:
+            raise ValueError(
+                f"Batch size {len(contents)} exceeds max {self.max_batch_size}. "
+                f"Split into multiple batches."
+            )
+
+        batch_name = batch_name or f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        logger.info(f"Preparing batch '{batch_name}' with {len(contents)} pre-crawled items")
+
+        # Build batch requests
+        batch_requests = []
+        id_mapping = {}  # custom_id -> original id mapping
+
+        for idx, item in enumerate(contents):
+            item_id = item.get('id', f'item_{idx}')
+            title = item.get('title', '')
+            content = item.get('contents', '')
+
+            if not content:
+                logger.warning(f"Empty content for {item_id}")
+                continue
+
+            custom_id = f"request_{idx}"
+            id_mapping[custom_id] = item_id
+
+            # Create batch request in Gemini format
+            request = {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": f"/v1/models/{LLM_MODEL}:generateContent",
+                "body": {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": f"Title: {title}\n\nContent: {content}"
+                                }
+                            ]
+                        }
+                    ],
+                    "systemInstruction": {
+                        "parts": [
+                            {
+                                "text": self._get_system_prompt()
+                            }
+                        ]
+                    },
+                    "generationConfig": {
+                        "response_mime_type": "application/json",
+                        "response_schema": self._get_response_schema()
+                    }
+                }
+            }
+
+            batch_requests.append(request)
+
+        # Write to JSONL file
+        batch_file = self.batch_dir / f"{batch_name}.jsonl"
+        with open(batch_file, 'w') as f:
+            for req in batch_requests:
+                f.write(json.dumps(req) + '\n')
+
+        # Save ID mapping
+        mapping_file = self.batch_dir / f"{batch_name}_mapping.json"
+        with open(mapping_file, 'w') as f:
+            json.dump(id_mapping, f, indent=2)
+
+        logger.info(
+            f"✓ Batch prepared: {len(batch_requests)}/{len(contents)} requests "
+            f"written to {batch_file}"
+        )
+
+        return str(batch_file)
+
     def submit_batch(self, batch_file_path: str) -> str:
         """
         Submit batch job to Google Gemini Batch API.
@@ -167,8 +258,11 @@ class BatchProcessor:
         """
         logger.info(f"Submitting batch job: {batch_file_path}")
 
-        # Upload batch file
-        batch_file = genai.upload_file(batch_file_path)
+        # Upload batch file (specify MIME type for .jsonl files)
+        batch_file = genai.upload_file(
+            batch_file_path,
+            mime_type="application/json"  # JSONL is treated as JSON
+        )
 
         # Create batch job
         model = genai.GenerativeModel(model_name="gemini-2.0-flash")

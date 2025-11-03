@@ -19,9 +19,23 @@ batch_processor = BatchProcessor(gemini_key=GEMINI_KEY)
 app = FastAPI(title="News Classification Batch API", version="1.0.0")
 
 
+class ContentItem(BaseModel):
+    """Single content item with title and contents."""
+    id: str
+    title: str
+    contents: str
+
+
 class BatchRequest(BaseModel):
-    """Request model for batch processing."""
+    """Request model for batch processing with URLs."""
     urls: List[HttpUrl] = Field(..., min_items=1, max_items=1000)
+    batch_name: Optional[str] = None
+    wait_for_completion: bool = False
+
+
+class BatchContentRequest(BaseModel):
+    """Request model for batch processing with pre-crawled content."""
+    contents: List[ContentItem] = Field(..., min_items=1, max_items=1000)
     batch_name: Optional[str] = None
     wait_for_completion: bool = False
 
@@ -100,6 +114,64 @@ async def submit_batch(
             job_id=job_id,
             batch_name=batch_name,
             url_count=len(urls),
+            status="COMPLETED",
+            message=f"Batch completed. Use GET /batch/results/{job_id}/{batch_name} to retrieve"
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/batch/submit-contents", response_model=BatchSubmitResponse)
+def submit_batch_contents(
+    request: BatchContentRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Submit a batch with pre-crawled content (no URL crawling needed).
+
+    - **Async mode** (wait_for_completion=False): Returns immediately with job_id
+    - **Sync mode** (wait_for_completion=True): Waits for results (use for small batches)
+
+    Cost: 50% cheaper than real-time API ($0.15 input, $1.25 output per 1M tokens)
+    """
+    try:
+        # Convert ContentItem objects to dicts
+        contents = [item.model_dump() for item in request.contents]
+
+        # Prepare batch
+        batch_file = batch_processor.prepare_batch_from_contents(
+            contents,
+            batch_name=request.batch_name
+        )
+        batch_name = Path(batch_file).stem
+
+        # Submit to Gemini
+        job_id = batch_processor.submit_batch(batch_file)
+
+        # If async mode, return immediately
+        if not request.wait_for_completion:
+            return BatchSubmitResponse(
+                job_id=job_id,
+                batch_name=batch_name,
+                url_count=len(contents),
+                status="SUBMITTED",
+                message=f"Batch submitted. Use GET /batch/status/{job_id} to check progress"
+            )
+
+        # Sync mode: wait for completion
+        success = batch_processor.wait_for_completion(job_id, poll_interval=30)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Batch processing failed or timed out"
+            )
+
+        return BatchSubmitResponse(
+            job_id=job_id,
+            batch_name=batch_name,
+            url_count=len(contents),
             status="COMPLETED",
             message=f"Batch completed. Use GET /batch/results/{job_id}/{batch_name} to retrieve"
         )
