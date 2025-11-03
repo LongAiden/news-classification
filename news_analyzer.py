@@ -1,20 +1,29 @@
 import re
+import os
 import logging
+import asyncio
+import httpx
 from typing import Tuple, Optional
 
-import httpx
 from pydantic_ai import Agent
 from pydantic_ai.models.google import GoogleModel, GoogleProvider
 
 from models import ClassificationResultFromText
+from dotenv import load_dotenv
+load_dotenv()
 
 # Configure logger
+logging.basicConfig(filename="./logs/newfile.log",
+                    format='%(asctime)s %(message)s',
+                    filemode='w')
 logger = logging.getLogger(__name__)
 
+GEMINI_KEY = os.getenv('GOOGLE_API_KEY')
 # Default headers for HTTP requests
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
+TIMEOUT = 30
 
 
 class NewsAnalyzer:
@@ -77,7 +86,7 @@ class NewsAnalyzer:
         # Test the agent with a simple query
         logger.info("✓ Pydantic AI Agent configured successfully")
 
-    async def extract_url(self, url: str, timeout: float = 15.0) -> Tuple[Optional[str], str]:
+    async def extract_url(self, url: str, timeout: float=TIMEOUT) -> Tuple[Optional[str], str]:
         """Fetches a URL and returns (title, text). Best-effort, no external services.
 
         - Uses httpx with a friendly UA and timeout.
@@ -100,10 +109,12 @@ class NewsAnalyzer:
             for tag in soup(["script", "style", "noscript"]):
                 tag.decompose()
             text_content = soup.get_text(" ", strip=True)
-            logger.info(f"Get the contents of the news with length: {len(text_content)}")
-        except Exception:
+            logger.info(
+                f"Get the contents of the news with length: {len(text_content)}")
+        except Exception as e:
             # Fallback: naive tag removal
-            title_match = re.search(r"<title>(.*?)</title>", html, flags=re.I | re.S)
+            title_match = re.search(
+                r"<title>(.*?)</title>", html, flags=re.I | re.S)
             if title_match:
                 title = re.sub(r"\s+", " ", title_match.group(1)).strip()
             # Remove scripts/styles
@@ -112,46 +123,50 @@ class NewsAnalyzer:
             # Strip tags
             text_only = re.sub(r"<[^>]+>", " ", html)
             text_content = re.sub(r"\s+", " ", text_only).strip()
+            logger.error(f" Cannot get the contents from the url: {e}")
 
         return title, text_content or ""
 
-    async def llm_analyzer(self, contents: str, title: str) -> ClassificationResultFromText:
-        """Analyze news content using LLM and return structured classification result."""
-        # Use Pydantic AI Agent for structured response with proper user message
-        user_message = f"""- Title: {title}
-                           - Contents: {contents}"""
+    async def llm_analyzer(
+        self, contents: str, title: str, timeout: float = TIMEOUT
+    ) -> ClassificationResultFromText:
+        """Analyze news content with LLM. Includes timeout protection for long inference."""
+        user_message = f"- Title: {title}\n- Contents: {contents}"
 
         try:
-            logger.info(f"Analyzing news input: {len(contents)} characters")
-            response = await self.agent.run(user_message)
+            logger.info(f"Analyzing {len(contents)} chars of text via LLM")
 
-            result = ClassificationResultFromText(
+            response = await asyncio.wait_for(self.agent.run(user_message), timeout=timeout)
+
+            return ClassificationResultFromText(
                 page_title=title,
-                is_financial=response.data.is_financial,
-                country=response.data.country,
-                sector=response.data.sector,
-                companies=response.data.companies,
-                confident_score=response.data.confident_score,
-                sentiment=response.data.sentiment,
-                summary_en=response.data.summary_en,
-                summary_tr=response.data.summary_tr,
+                is_financial=response.output.is_financial,
+                country=getattr(response.output, "country", None),
+                sector=response.output.sector,
+                companies=response.output.companies,
+                confident_score=response.output.confident_score,
+                sentiment=response.output.sentiment,
+                summary_en=response.output.summary_en,
+                summary_tr=response.output.summary_tr,
                 extracted_characters=len(contents or ""),
             )
 
-            return result
-
+        except asyncio.TimeoutError:
+            logger.error("LLM analysis timed out.")
+            raise TimeoutError(
+                f"LLM analysis exceeded timeout of {timeout} seconds.")
         except Exception as e:
-            logger.error(f"Error in analyzing contents: {e}")
+            logger.exception(f"Error during LLM analysis: {e}")
             raise
 
-    async def full_flow_with_url(self, url: str) -> ClassificationResultFromText:
+    async def analyze_with_url(self, url: str, timeout=TIMEOUT) -> ClassificationResultFromText:
         """Complete analysis pipeline: extract URL content and analyze with LLM."""
         title, text = await self.extract_url(url)
-        llm_output = await self.llm_analyzer(contents=text, title=title)
+        llm_output = await self.llm_analyzer(contents=text, title=title, timeout=TIMEOUT)
 
         return llm_output
-    
-    async def full_flow_with_contents(self, text: str, title:str) -> ClassificationResultFromText:
+
+    async def analyze_with_contents(self, text: str, title: str, timeout=TIMEOUT) -> ClassificationResultFromText:
         """Complete analysis pipeline: analyze with text and title"""
         llm_output = await self.llm_analyzer(contents=text, title=title)
 

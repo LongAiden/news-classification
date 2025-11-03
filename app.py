@@ -13,21 +13,16 @@ from news_analyzer import NewsAnalyzer
 
 app = FastAPI(title="News Classification API", version="1.0.0")
 
-# Singleton analyzer instance
-_analyzer: Optional[NewsAnalyzer] = None
-
 
 def get_analyzer() -> NewsAnalyzer:
     """Get or create the NewsAnalyzer singleton instance."""
-    global _analyzer
-    if _analyzer is None:
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
-            )
-        _analyzer = NewsAnalyzer(gemini_key=api_key)
-    return _analyzer
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
+        )
+    analyzer = NewsAnalyzer(gemini_key=api_key)
+    return analyzer
 
 
 @app.get("/health")
@@ -37,11 +32,11 @@ def healthcheck() -> dict:
 
 @app.get("/classify/url", response_model=ClassificationResult)
 async def analyze_url(url: HttpUrl = Query(..., description="Public article URL"),
-                       timeout=30):
+                      timeout=int):
     """Classify a news article from URL (GET request)."""
     try:
         analyzer = get_analyzer()
-        result = await analyzer.full_flow_with_url(str(url), timeout=timeout)
+        result = await analyzer.analyze_with_url(str(url))
         return result
 
     except requests.Timeout:
@@ -62,7 +57,7 @@ async def analyze_text(text:str, title:str):
     """Classify a news article from URL (POST request)."""
     try:
         analyzer = get_analyzer()
-        result = await analyzer.full_flow_with_contents(text=text, title=title)
+        result = await analyzer.analyze_with_contents(text=text, title=title)
         return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

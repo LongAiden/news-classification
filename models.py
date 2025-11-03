@@ -19,7 +19,7 @@ class ClassificationResultFromUrl(BaseModel):
     extracted_characters: int = 0
 
 class ClassificationResultFromText(BaseModel):
-    page_title: Optional[str] = None
+    page_title: Optional[str] = str
     is_financial: Literal["Yes", "No"]
     country: List[str] = []
     sector: List[str] = []
