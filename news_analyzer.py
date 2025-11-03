@@ -1,0 +1,144 @@
+import re
+import logging
+from typing import Tuple, Optional
+
+import httpx
+from pydantic_ai import Agent
+from pydantic_ai.models.google import GoogleModel, GoogleProvider
+
+from models import ClassificationResultFromText
+
+# Configure logger
+logger = logging.getLogger(__name__)
+
+# Default headers for HTTP requests
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+
+class NewsAnalyzer:
+    def __init__(self, gemini_key: str):
+        self.provider = GoogleProvider(api_key=gemini_key)
+        self.model = GoogleModel('gemini-2.5-flash', provider=self.provider)
+
+        # Create agent with system prompt and output type
+        self.agent = Agent(
+            self.model,
+            output_type=ClassificationResultFromText,
+            system_prompt="""You are a professional news analyst specializing in financial and business reporting.
+                            Your goal is to interpret a given news article and provide a concise, structured analysis.:
+                            Given a news title and content, perform the following tasks clearly and objectively:
+
+                            1. Financial Relevance:
+                            - Determine whether the news is related to finance, economy, or markets.
+                            - Output: Yes or No.
+
+                            2. Sector Classification:
+                            - Identify which industry or sector the news focuses on.
+                            - (Examples: Technology, Banking, F&B, Heavy Industry, Manufacturing, Energy, Healthcare, etc.)
+
+                            3. Companies Mentioned:
+                            - List all companies, organizations, or indices mentioned in the article.
+                            - If none are directly mentioned, state: None.
+
+                            4. Sentiment Analysis:
+                            - Classify the overall tone of the news as Positive, Negative, or Neutral.
+                            - Provide a confidence score between 1.0 and 10.0, where 10.0 = highest confidence.
+
+                            5. Summaries:
+                            - English Summary: 2–3 sentences summarizing the main points.
+                            - Turkish Summary: 2–3 sentences summarizing the same in Turkish.
+
+                            Example:
+                            China's factory activity growth in October missed market expectations,
+                            dragged down by a sharper drop in new export orders,
+                            as trade tensions with the U.S. intensified during the month, according to a private survey released Monday.
+                            The RatingDog China General Manufacturing PMI, compiled by S&P Global,
+                            dropped to 50.6 in October from the six-month high of 51.2 in September,
+                            missing analysts' expectations of 50.9 in a Reuters poll.
+                            New export orders fell at the quickest pace since May,
+                            which the survey respondents attributed to "rising trade uncertainty.
+
+                            Output:
+                            - Financial Check: Yes
+                            - Sector: Manufacturing, Industrial Production
+                            - Companies Mentioned: S&P Global, RatingDog China General Manufacturing PMI
+                            - Sentiment Classification: Negative
+                            Reason: Factory growth slowed, missed expectations, and export orders fell sharply amid U.S. trade tensions.
+                            - Confidence Score: 9.0 / 10.0
+                            - English Summary:
+                            China's manufacturing sector lost momentum in October as the RatingDog China General Manufacturing PMI slipped to 50.6, below expectations. New export orders dropped at the fastest rate since May due to growing trade tensions with the U.S., signaling mounting pressure on the industrial economy.
+                            - Turkish Summary:
+                            Çin'in imalat sektörü Ekim ayında ivme kaybetti. RatingDog Çin Genel İmalat PMI endeksi 50,6'ya gerileyerek beklentilerin altında kaldı. Yeni ihracat siparişleri, ABD ile artan ticaret gerilimi nedeniyle Mayıs ayından bu yana en hızlı düşüşünü yaşadı.
+                            Bu durum, sanayi ekonomisi üzerindeki baskının arttığını gösteriyor."""
+        )
+
+        # Test the agent with a simple query
+        logger.info("✓ Pydantic AI Agent configured successfully")
+
+    async def extract_url(self, url: str, timeout: float = 15.0) -> Tuple[Optional[str], str]:
+        """Fetches a URL and returns (title, text). Best-effort, no external services.
+
+        - Uses httpx with a friendly UA and timeout.
+        - Tries BeautifulSoup if available for better parsing; otherwise falls back to regex strip.
+        """
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=timeout) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+
+        title = None
+        text_content = None
+
+        try:
+            from bs4 import BeautifulSoup  # type: ignore
+
+            soup = BeautifulSoup(html, "html.parser")
+            title = soup.title.get_text(strip=True) if soup.title else None
+            # Remove script/style
+            for tag in soup(["script", "style", "noscript"]):
+                tag.decompose()
+            text_content = soup.get_text(" ", strip=True)
+        except Exception:
+            # Fallback: naive tag removal
+            title_match = re.search(r"<title>(.*?)</title>", html, flags=re.I | re.S)
+            if title_match:
+                title = re.sub(r"\s+", " ", title_match.group(1)).strip()
+            # Remove scripts/styles
+            html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
+            html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.I)
+            # Strip tags
+            text_only = re.sub(r"<[^>]+>", " ", html)
+            text_content = re.sub(r"\s+", " ", text_only).strip()
+
+        return title, text_content or ""
+
+    async def llm_analyzer(self, contents: str, title: str) -> ClassificationResultFromText:
+        """Analyze news content using LLM and return structured classification result."""
+        # Use Pydantic AI Agent for structured response with proper user message
+        user_message = f"""- Title: {title}
+                           - Contents: {contents}"""
+
+        response = await self.agent.run(user_message)
+
+        result = ClassificationResultFromText(
+            page_title=title,
+            is_financial=response.data.is_financial,
+            country=response.data.country,
+            sector=response.data.sector,
+            companies=response.data.companies,
+            sentiment=response.data.sentiment,
+            summary_en=response.data.summary_en,
+            summary_tr=response.data.summary_tr,
+            extracted_characters=len(contents or ""),
+        )
+
+        return result
+
+    async def full_flow(self, url: str) -> ClassificationResultFromText:
+        """Complete analysis pipeline: extract URL content and analyze with LLM."""
+        title, text = await self.extract_url(url)
+        llm_output = await self.llm_analyzer(contents=text, title=title)
+
+        return llm_output

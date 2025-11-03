@@ -6,16 +6,25 @@ class ClassificationRequest(BaseModel):
     url: HttpUrl = Field(..., description="Public URL of a news article")
 
 
-class ClassificationResult(BaseModel):
+class ClassificationResultFromUrl(BaseModel):
     source_url: HttpUrl
     page_title: Optional[str] = None
     is_financial: bool
-    country: Optional[str] = None
-    sector: Optional[str] = None
+    country: List[str] = None
+    sector: List[str] = []
     companies: List[str] = []
-    sentiment: Literal["negative", "neutral", "positive"]
+    sentiment: Literal["Negative", "Neutral", "Positive"]
     summary_en: str
     summary_tr: str
     extracted_characters: int = 0
-    model_version: str = "draft-0.1"
 
+class ClassificationResultFromText(BaseModel):
+    is_financial: Literal["Yes", "No"]
+    country: List[str] = []
+    sector: List[str] = []
+    companies: List[str] = []
+    confident_score: float
+    sentiment: Literal["Negative", "Neutral", "Positive"]
+    summary_en: str
+    summary_tr: str
+    extracted_characters: int = 0
