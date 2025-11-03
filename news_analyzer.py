@@ -100,6 +100,7 @@ class NewsAnalyzer:
             for tag in soup(["script", "style", "noscript"]):
                 tag.decompose()
             text_content = soup.get_text(" ", strip=True)
+            logger.info(f"Get the contents of the news with length: {len(text_content)}")
         except Exception:
             # Fallback: naive tag removal
             title_match = re.search(r"<title>(.*?)</title>", html, flags=re.I | re.S)
@@ -121,28 +122,37 @@ class NewsAnalyzer:
                            - Contents: {contents}"""
 
         try:
+            logger.info(f"Analyzing news input: {len(contents)} characters")
             response = await self.agent.run(user_message)
-            logger.info(f"Analyze news input: {len(contents)} characters")
+
+            result = ClassificationResultFromText(
+                page_title=title,
+                is_financial=response.data.is_financial,
+                country=response.data.country,
+                sector=response.data.sector,
+                companies=response.data.companies,
+                confident_score=response.data.confident_score,
+                sentiment=response.data.sentiment,
+                summary_en=response.data.summary_en,
+                summary_tr=response.data.summary_tr,
+                extracted_characters=len(contents or ""),
+            )
+
+            return result
+
         except Exception as e:
-            logger.error(f"Error in analzing contents: {e}")
+            logger.error(f"Error in analyzing contents: {e}")
+            raise
 
-        result = ClassificationResultFromText(
-            page_title=title,
-            is_financial=response.output.is_financial,
-            country=response.output.country,
-            sector=response.output.sector,
-            companies=response.output.companies,
-            sentiment=response.output.sentiment,
-            summary_en=response.output.summary_en,
-            summary_tr=response.output.summary_tr,
-            extracted_characters=len(contents or ""),
-        )
-
-        return result
-
-    async def full_flow(self, url: str) -> ClassificationResultFromText:
+    async def full_flow_with_url(self, url: str) -> ClassificationResultFromText:
         """Complete analysis pipeline: extract URL content and analyze with LLM."""
         title, text = await self.extract_url(url)
+        llm_output = await self.llm_analyzer(contents=text, title=title)
+
+        return llm_output
+    
+    async def full_flow_with_contents(self, text: str, title:str) -> ClassificationResultFromText:
+        """Complete analysis pipeline: analyze with text and title"""
         llm_output = await self.llm_analyzer(contents=text, title=title)
 
         return llm_output

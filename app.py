@@ -1,44 +1,79 @@
 from __future__ import annotations
 
+import os
+import requests
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import HttpUrl
 
-from .models import ClassificationRequest, ClassificationResult
-from .classifier import classify_url
+from models import ClassificationRequest, ClassificationResult
+from news_analyzer import NewsAnalyzer
 
 
-app = FastAPI(title="News Classification (Draft)", version="0.1.0")
+app = FastAPI(title="News Classification API", version="1.0.0")
+
+# Singleton analyzer instance
+_analyzer: Optional[NewsAnalyzer] = None
 
 
-@app.get("/healthz")
+def get_analyzer() -> NewsAnalyzer:
+    """Get or create the NewsAnalyzer singleton instance."""
+    global _analyzer
+    if _analyzer is None:
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
+            )
+        _analyzer = NewsAnalyzer(gemini_key=api_key)
+    return _analyzer
+
+
+@app.get("/health")
 def healthcheck() -> dict:
     return {"ok": True}
 
 
-@app.get("/classify", response_model=ClassificationResult)
-def classify_get(url: HttpUrl = Query(..., description="Public article URL")):
+@app.get("/classify/url", response_model=ClassificationResult)
+async def analyze_url(url: HttpUrl = Query(..., description="Public article URL"),
+                       timeout=30):
+    """Classify a news article from URL (GET request)."""
     try:
-        result, _ = classify_url(str(url))
+        analyzer = get_analyzer()
+        result = await analyzer.full_flow_with_url(str(url), timeout=timeout)
         return result
+
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="Upstream request timed out while fetching the URL.")
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        raise HTTPException(status_code=status, detail=f"HTTP error while fetching the URL: {exc}")
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Network error while fetching the URL: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
 
 
-@app.post("/classify", response_model=ClassificationResult)
-def classify_post(payload: ClassificationRequest):
+@app.post("/classify/text", response_model=ClassificationResult)
+async def analyze_text(text:str, title:str):
+    """Classify a news article from URL (POST request)."""
     try:
-        result, _ = classify_url(str(payload.url))
+        analyzer = get_analyzer()
+        result = await analyzer.full_flow_with_contents(text=text, title=title)
         return result
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 if __name__ == "__main__":
-    # Optional: run with `python -m news_classification.app`
+    # Optional: run with `python app.py`
     import uvicorn
 
     uvicorn.run(
-        "news_classification.app:app",
+        "app:app",
         host="0.0.0.0",
         port=8000,
         reload=True,

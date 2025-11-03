@@ -19,6 +19,7 @@ class ClassificationResultFromUrl(BaseModel):
     extracted_characters: int = 0
 
 class ClassificationResultFromText(BaseModel):
+    page_title: Optional[str] = None
     is_financial: Literal["Yes", "No"]
     country: List[str] = []
     sector: List[str] = []
@@ -28,3 +29,7 @@ class ClassificationResultFromText(BaseModel):
     summary_en: str
     summary_tr: str
     extracted_characters: int = 0
+
+
+# Alias for API compatibility
+ClassificationResult = ClassificationResultFromText
