@@ -24,7 +24,7 @@ from google import genai  # Newer SDK with batch API support
 from google.genai import types as genai_types
 
 from models import ClassificationResultFromText
-from news_analyzer import NewsAnalyzer, BATCH_LIMIT
+from news_analyzer import NewsAnalyzer, BATCH_LIMIT, SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -436,39 +436,11 @@ class BatchProcessor:
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for batch requests."""
-        return """Analyze financial news. Return structured JSON:
-
-1. Financial: Yes/No
-2. Country: List of countries mentioned
-3. Sectors: List (Technology, Banking, Energy, etc.)
-4. Companies: List all companies/indices mentioned
-5. Sentiment: Positive/Neutral/Negative
-6. Confidence: Float 1.0-10.0
-7. Summary EN: 2-3 sentences
-8. Summary TR: 2-3 sentences (Turkish)
-
-Be concise and accurate."""
+        return SYSTEM_PROMPT
 
     def _get_response_schema(self) -> Dict:
         """Get JSON schema for structured output."""
-        return {
-            "type": "object",
-            "properties": {
-                "page_title": {"type": "string"},
-                "is_financial": {"type": "string", "enum": ["Yes", "No"]},
-                "country": {"type": "array", "items": {"type": "string"}},
-                "sector": {"type": "array", "items": {"type": "string"}},
-                "companies": {"type": "array", "items": {"type": "string"}},
-                "confident_score": {"type": "number"},
-                "sentiment": {"type": "string", "enum": ["Positive", "Neutral", "Negative"]},
-                "summary_en": {"type": "string"},
-                "summary_tr": {"type": "string"}
-            },
-            "required": [
-                "is_financial", "sector", "companies", "sentiment",
-                "summary_en", "summary_tr", "confident_score"
-            ]
-        }
+        return ClassificationResultFromText.model_json_schema()
 
 
 async def process_batch_workflow(
