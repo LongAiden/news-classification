@@ -135,3 +135,15 @@ class NewsAnalyzer:
         llm_output = await self.llm_analyzer(contents=text, title=title)
 
         return llm_output
+    
+
+def get_analyzer() -> NewsAnalyzer:
+    """Get or create the NewsAnalyzer singleton instance."""
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
+        )
+    analyzer = NewsAnalyzer(gemini_key=api_key)
+    return analyzer
+
