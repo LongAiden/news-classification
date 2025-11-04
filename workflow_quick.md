@@ -1,5 +1,6 @@
 1. Import get_analyzer and class NewsAnalyzer from news_analyzer.py
-- Note GEMINI API KEY: GEMINI_KEY = os.getenv('GOOGLE_API_KEY')
+- Note GEMINI API KEY: 
+GEMINI_KEY = os.getenv('GOOGLE_API_KEY')
 
 2.How to run:
 analyzer = get_analyzer()
