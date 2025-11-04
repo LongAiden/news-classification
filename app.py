@@ -1,28 +1,25 @@
 from __future__ import annotations
 
-import os
-import requests
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import HttpUrl
+from fastapi import Depends, FastAPI, Form, HTTPException, Query
 
-from models import ClassificationRequest, ClassificationResult
-from news_analyzer import NewsAnalyzer
-
-
-app = FastAPI(title="News Classification API", version="1.0.0")
+from models import ClassificationResult
+from news_analyzer import NewsAnalyzer, get_analyzer, shutdown_analyzer
 
 
-def get_analyzer() -> NewsAnalyzer:
-    """Get or create the NewsAnalyzer singleton instance."""
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
-        )
-    analyzer = NewsAnalyzer(gemini_key=api_key)
-    return analyzer
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    analyzer = get_analyzer()
+    await analyzer.start()
+    try:
+        yield
+    finally:
+        await shutdown_analyzer()
+
+
+app = FastAPI(title="News Classification API", version="1.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -31,36 +28,77 @@ def healthcheck() -> dict:
 
 
 @app.get("/classify/url", response_model=ClassificationResult)
-async def analyze_url(url: HttpUrl = Query(..., description="Public article URL"),
-                      timeout=int):
-    """Classify a news article from URL (GET request)."""
+async def analyze_url(
+    url: str = Query(
+        ...,
+        min_length=1,
+        max_length=2083,
+        description="Public article URL",
+    ),
+    fetch_timeout: Optional[float] = Query(
+        default=None,
+        ge=1.0,
+        le=120.0,
+        description="Override the timeout (seconds) used to download the article.",
+    ),
+    llm_timeout: Optional[float] = Query(
+        default=None,
+        ge=5.0,
+        le=180.0,
+        description="Override the timeout (seconds) used for the LLM call.",
+    ),
+    analyzer: NewsAnalyzer = Depends(get_analyzer),
+) -> ClassificationResult:
+    """Classify a news article fetched from a remote URL."""
     try:
-        analyzer = get_analyzer()
-        result = await analyzer.analyze_with_url(str(url))
-        return result
-
-    except requests.Timeout:
-        raise HTTPException(status_code=504, detail="Upstream request timed out while fetching the URL.")
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else 502
-        raise HTTPException(status_code=status, detail=f"HTTP error while fetching the URL: {exc}")
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Network error while fetching the URL: {exc}")
+        return await analyzer.analyze_with_url(
+            str(url),
+            fetch_timeout=fetch_timeout,
+            llm_timeout=llm_timeout,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}") from exc
 
 
 @app.post("/classify/text", response_model=ClassificationResult)
-async def analyze_text(text:str, title:str):
-    """Classify a news article from URL (POST request)."""
+async def analyze_text(
+    text: str = Form(
+        ...,
+        min_length=20,
+        max_length=100000,
+        description="Plain-text contents of the article. Long inputs are auto-trimmed to control costs.",
+    ),
+    title: Optional[str] = Form(
+        default=None,
+        min_length=3,
+        max_length=500,
+        description="Optional headline for the article. Auto-derived from text when omitted.",
+    ),
+    llm_timeout_seconds: Optional[float] = Form(
+        default=None,
+        ge=5.0,
+        le=180.0,
+        description="Override the default timeout (seconds) used for the LLM call.",
+    ),
+    analyzer: NewsAnalyzer = Depends(get_analyzer),
+) -> ClassificationResult:
+    """Classify raw article text supplied directly by the caller."""
     try:
-        analyzer = get_analyzer()
-        result = await analyzer.analyze_with_contents(text=text, title=title)
-        return result
+        return await analyzer.analyze_with_contents(
+            text=text,
+            title=title,
+            llm_timeout=llm_timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}") from exc
 
 
 if __name__ == "__main__":
@@ -73,4 +111,3 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
     )
-

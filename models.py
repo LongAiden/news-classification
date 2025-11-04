@@ -1,35 +1,118 @@
 from typing import List, Optional, Literal
-from pydantic import BaseModel, HttpUrl, Field
+
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict, field_validator, model_validator
 
 
-class ClassificationRequest(BaseModel):
-    url: HttpUrl = Field(..., description="Public URL of a news article")
+class TextClassificationRequest(BaseModel):
+    """Payload accepted by the /classify/text endpoint."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Starbucks leans on discounts as China rivals surge",
+                "text": "Today, the company has roughly 6,000 locations in China, but Starbucks has big ambitions for the market..."
+                        " However, an economic slowdown and increased competition from local chains have weighed on sales.",
+                "llm_timeout_seconds": 45,
+            }
+        }
+    )
+
+    title: Optional[str] = Field(
+        default=None,
+        min_length=3,
+        max_length=500,
+        description="Optional headline for the article. Auto-derived from text when omitted.",
+    )
+    text: str = Field(
+        ...,
+        min_length=20,
+        max_length=100000,
+        description="Plain-text contents of the article. Long inputs are auto-trimmed to control costs.",
+    )
+    llm_timeout_seconds: Optional[float] = Field(
+        default=None,
+        ge=5.0,
+        le=180.0,
+        description="Override the default timeout (seconds) used for the LLM call.",
+    )
+
+    @field_validator("text")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _ensure_title(self):
+        candidate = (self.title or "").strip()
+        if not candidate:
+            stripped = self.text.strip()
+            if stripped:
+                candidate = stripped.splitlines()[0][:120]
+            else:
+                candidate = "Untitled article"
+        self.title = candidate
+        return self
 
 
-class ClassificationResultFromUrl(BaseModel):
-    source_url: HttpUrl
-    page_title: Optional[str] = None
-    is_financial: bool
-    country: List[str] = None
-    sector: List[str] = []
-    companies: List[str] = []
-    sentiment: Literal["Negative", "Neutral", "Positive"]
-    summary_en: str
-    summary_tr: str
-    extracted_characters: int = 0
+class ClassificationResult(BaseModel):
+    """Unified result returned by both real-time and batch classifiers."""
 
-class ClassificationResultFromText(BaseModel):
-    page_title: Optional[str] = str
-    is_financial: Literal["Yes", "No"]
-    country: List[str] = []
-    sector: List[str] = []
-    companies: List[str] = []
-    confident_score: float
-    sentiment: Literal["Negative", "Neutral", "Positive"]
-    summary_en: str
-    summary_tr: str
-    extracted_characters: int = 0
+    model_config = ConfigDict(extra="ignore")
 
+    source_url: Optional[HttpUrl] = Field(
+        default=None, description="Original article URL when content was fetched remotely."
+    )
+    page_title: Optional[str] = Field(
+        default=None, description="Title inferred from the article or provided by the caller."
+    )
+    is_financial: bool = Field(
+        ..., description="True when the article is related to finance, business, or markets."
+    )
+    country: List[str] = Field(
+        default_factory=list, description="Countries or regions referenced in the article."
+    )
+    sector: List[str] = Field(
+        default_factory=list, description="Industry sectors mentioned in the article."
+    )
+    companies: List[str] = Field(
+        default_factory=list, description="Companies, organisations, or indices that appear."
+    )
+    confident_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=10.0,
+        description="Confidence score supplied by the model on a 0-10 scale.",
+    )
+    sentiment: Literal["Negative", "Neutral", "Positive"] = Field(
+        ..., description="Overall sentiment classification."
+    )
+    summary_en: str = Field(..., description="Two to three sentence English summary.")
+    summary_tr: str = Field(..., description="Two to three sentence Turkish summary.")
+    extracted_characters: int = Field(
+        default=0,
+        ge=0,
+        description="Number of characters from the article that were processed by the model.",
+    )
 
-# Alias for API compatibility
-ClassificationResult = ClassificationResultFromText
+    @field_validator("is_financial", mode="before")
+    @classmethod
+    def _normalize_is_financial(cls, value) -> bool:
+        """Accept booleans or Yes/No style strings from LLM output."""
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in {"yes", "true", "1"}:
+                return True
+            if normalised in {"no", "false", "0"}:
+                return False
+        return bool(value)
+
+    @field_validator("country", "sector", "companies", mode="before")
+    @classmethod
+    def _default_list(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and not value.strip():
+            return []
+        return list(value) if not isinstance(value, (str, bytes)) else [value]

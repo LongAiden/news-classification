@@ -1,26 +1,50 @@
-1. Import get_analyzer and class NewsAnalyzer from news_analyzer.py
-- Note GEMINI API KEY: 
-GEMINI_KEY = os.getenv('GOOGLE_API_KEY')
+# Quick Workflow
 
-2.How to run:
-analyzer = get_analyzer()
+This guide shows how to stand up the News Classification API, call it in real time, and cut latency and token costs.
 
-title = "Few CRE companies have achieved their AI goals. Here's why"
-text_content = '''Few CRE companies have achieved their AI goals. Here\'s why Skip Navigation Markets Pre-Markets U.S. Markets Europe Markets China Markets Asia Markets World Markets Currencies Cryptocurrency Futures & Commodities Bonds Funds & ETFs Business Economy Finance Health & Science Media Real Estate...'''
+## 1. Environment setup
+- Install dependencies once: `pip install -r requirements.txt`
+- Provide a Gemini API key: `export GOOGLE_API_KEY="your-key"` (fallback: `GEMINI_API_KEY`)
+- Optional: create a `.env` file with the same key so local scripts pick it up automatically.
 
-3. Get the output
-test = await analyzer.analyze_with_contents(text=text_content, title=title)
+## 2. Start the API
+- From the project root run `uvicorn app:app --reload`
+- The FastAPI docs are at http://127.0.0.1:8000/docs and include example payloads.
+- Health check: `curl http://127.0.0.1:8000/health`
 
-output = test.model_dump()
+## 3. Classify news in real time
+### POST `/classify/text`
+```
+curl -X POST http://127.0.0.1:8000/classify/text \
+  -H "Content-Type: application/json" \
+  -d '{
+        "title": "Few CRE companies have achieved their AI goals. Here is why",
+        "text": "...full article text...",
+        "llm_timeout_seconds": 60
+      }'
+```
+- The body matches `TextClassificationRequest` so it can be re-used in scripts.
+- Responses follow the unified `ClassificationResult` schema:
+  - `is_financial` (bool), `sector`, `companies`, `country`
+  - `confident_score`, `sentiment`
+  - `summary_en`, `summary_tr`, `extracted_characters`, `source_url`
 
-=> Output should be like this
-{'page_title': "Few CRE companies have achieved their AI goals. Here's why",
- 'is_financial': 'Yes',
- 'country': [],
- 'sector': [],
- 'companies': [],
- 'confident_score': 9.5,
- 'sentiment': 'Neutral',
- 'summary_en': 'A recent JLL survey indicates that while commercial real estate (CRE) companies are increasingly adopting AI, with 88% piloting it for an average of five use cases, only 5% have fully achieved their AI goals. This is attributed to the moving goalposts, as companies now aim to tie AI to revenue and business growth rather than just operational efficiencies, requiring fundamental changes to operating models.',
- 'summary_tr': 'Yeni bir JLL anketine göre, ticari gayrimenkul (TG) şirketleri giderek daha fazla YZ benimsemesine rağmen (ortalamada beş kullanım durumu için pilot uygulama yapanların %88',
- 'extracted_characters': 7365}
+## 4. Speed & cost optimisations built in
+- **Connection reuse**: the API keeps a single async HTTP client, avoiding TLS handshakes on every request.
+- **Token control**: article bodies are cleaned and capped at `12_000` characters before reaching Gemini, reducing spend on long pieces.
+- **Timeout knobs**: per-request `fetch_timeout` and `llm_timeout` let you fail fast instead of paying for slow calls.
+- **Smaller model**: default model `gemini-2.5-flash-lite` is tuned for low latency; swap to a larger model only when extra reasoning is required.
+
+## 5. Batch for large volumes (≈50% cheaper)
+- Use `batch_processing/batch_processor.py` when you have pre-crawled text and want to push hundreds of items at once.
+- Batch mode amortises the prompt cost and is ideal for nightly crawls of >100 articles.
+- Sample flow:
+  1. Collect items shaped like `{"id": "...", "title": "...", "contents": "...clean text..."}`.
+  2. Run `BatchProcessor.prepare_batch_from_contents(...)` to build the JSONL payload locally.
+  3. Submit with `submit_batch(...)`, then poll `wait_for_completion(...)`.
+  4. Parse the JSONL results back into `ClassificationResult` objects—no extra URL fetching required.
+
+## 6. Troubleshooting
+- 504 errors indicate the fetch or LLM timeout was reached; increase the relevant timeout or inspect logs.
+- 422 errors mean no readable text was extracted—verify the URL is public or strip HTML from custom payloads.
+- Inspect `logs/` for detailed traces; adjust logging in `news_analyzer.py` if you need more verbosity.
