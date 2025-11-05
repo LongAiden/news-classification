@@ -111,8 +111,8 @@ class ClassificationResult(BaseModel):
     companies: List[str] = Field(
         default_factory=list, description="Companies, organisations, or indices that appear."
     )
-    confident_score: Optional[float] = Field(
-        default=None,
+    confident_score: float = Field(
+        ...,
         ge=0.0,
         le=10.0,
         description="Confidence score supplied by the model on a 0-10 scale.",
@@ -155,6 +155,19 @@ class ClassificationResult(BaseModel):
         ge=0,
         description="Number of characters from the article that were processed by the model.",
     )
+
+    @field_validator("confident_score", mode="before")
+    @classmethod
+    def _validate_confident_score(cls, value):
+        """Ensure confident_score is always provided."""
+        if value is None:
+            raise ValueError("confident_score is required and cannot be None. Model must provide a confidence score between 0.0 and 10.0.")
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                raise ValueError(f"confident_score must be numeric, got: {value}")
+        return float(value)
 
     @field_validator("is_financial", mode="before")
     @classmethod

@@ -35,27 +35,28 @@ MAX_CONCURRENT_REQUESTS = 30  # Conservative for Tier 1 (4,000 RPM limit)
 MIN_REQUEST_INTERVAL = 0.05  # Minimum seconds between requests (Tier 1: 60 RPM = 1s interval)
 
 SYSTEM_PROMPT = """You are a professional news analyst specialising in financial and business reporting.
-Interpret the supplied article title and body, then populate the output schema exactly.
+Interpret the supplied article title and body, then populate ALL FIELDS in the output schema exactly.
 
-For each article determine:
+For each article you MUST determine ALL of the following:
 1. is_financial: True if the piece has a financial or business focus, otherwise False.
-2. sector: Industry or market sectors referenced (list of strings, empty if none).
-3. companies: 
+2. sector: Industry or market sectors referenced (list of strings, empty list [] if none).
+3. companies:
    - Include only named operating companies or subsidiaries that are materially involved or affected in the article.
    - Exclude unless the article is about them:
      • Media outlets (Reuters, CNBC, etc.)
      • Data/survey/benchmark providers (S&P Global, Markit, PMI compilers)
      • Government agencies, regulators, NGOs, think tanks
      • Stock indices or ETFs (S&P 500, MSCI, etc.)
-     • Generic groups with no explicit company names (“Chinese automakers”)
+     • Generic groups with no explicit company names ("Chinese automakers")
    - Use canonical company names, no duplicates.
-   - If no target companies appear, return an empty list.
-4. country: Countries or regions mentioned (list of strings, empty if none).
+   - If no target companies appear, return an empty list [].
+4. country: Countries or regions mentioned or implied (list of strings, empty list [] if none).
 5. sentiment: One of Negative, Neutral, Positive describing the overall tone.
-6. confident_score: Numeric confidence between 0.0 and 10.0.
+6. confident_score: REQUIRED - Your numeric confidence between 0.0 and 10.0. Always provide a score.
 7. summary_en: Complete 2-3 sentence English summary (50-100 words). Always finish complete sentences.
 8. summary_tr: Complete 2-3 sentence Turkish summary (50-100 words). Always finish complete sentences.
 
+IMPORTANT: You MUST provide ALL fields, including confident_score. Do not omit any fields.
 Always respond in JSON compatible with the provided schema. Do not include additional commentary."""
 
 WHITESPACE_RE = re.compile(r"\s+")
