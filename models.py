@@ -86,22 +86,6 @@ class ClassificationResult(BaseModel):
         min_length=3,
         description="Title inferred from the article or provided by the caller."
     )
-
-    @field_validator("page_title", mode="before")
-    @classmethod
-    def _validate_page_title(cls, value):
-        """Ensure page_title is a valid string, not a type object."""
-        if value is None:
-            return None
-        if isinstance(value, type):
-            return None
-        if not isinstance(value, str):
-            return str(value) if value else None
-        stripped = value.strip()
-        return stripped if len(stripped) >= 3 else None
-    is_financial: bool = Field(
-        ..., description="True when the article is related to finance, business, or markets."
-    )
     country: List[str] = Field(
         default_factory=list, description="Countries or regions referenced in the article."
     )
@@ -122,27 +106,59 @@ class ClassificationResult(BaseModel):
     )
     summary_en: str = Field(
         ...,
-        min_length=20,
-        description="Two to three sentence English summary."
+        min_length=8,
+        description="Two to three sentence English summary, or 'No Value' for non-news content."
     )
     summary_tr: str = Field(
         ...,
-        min_length=20,
-        description="Two to three sentence Turkish summary."
+        min_length=8,
+        description="Two to three sentence Turkish summary, or 'No Value' for non-news content."
     )
 
-    @field_validator("summary_en", "summary_tr", mode="before")
+    summary_kr: str = Field(
+        ...,
+        min_length=8,
+        description="Two to three sentence Korean summary, or 'No Value' for non-news content."
+    )
+
+    is_news: bool = Field(
+        ..., description="True when the article is news."
+    )
+
+    is_financial: bool = Field(
+        ..., description="True when the article is related to finance, business, or markets."
+    )
+
+    @field_validator("page_title", mode="before")
+    @classmethod
+    def _validate_page_title(cls, value):
+        """Ensure page_title is a valid string, not a type object."""
+        if value is None:
+            return None
+        if isinstance(value, type):
+            return None
+        if not isinstance(value, str):
+            return str(value) if value else None
+        stripped = value.strip()
+        return stripped if len(stripped) >= 3 else None
+    
+
+    @field_validator("summary_en", "summary_tr", "summary_kr", mode="before")
     @classmethod
     def _validate_summaries(cls, value):
-        """Ensure summaries are meaningful and not truncated."""
+        """Ensure summaries are meaningful and not truncated, or 'No Value' for non-news."""
         if not isinstance(value, str):
-            return str(value) if value else "Summary not available."
+            return str(value) if value else "No Value"
 
         stripped = value.strip()
 
+        # Allow "No Value" for non-news content (confident_score will be 0.0)
+        if stripped == "No Value":
+            return stripped
+
         # Reject if too short or clearly truncated
         if len(stripped) < 20:
-            return "Summary not available."
+            return "No Value"
 
         # Check if summary ends abruptly (no punctuation)
         if stripped and stripped[-1] not in '.!?':
@@ -191,3 +207,15 @@ class ClassificationResult(BaseModel):
         if isinstance(value, str) and not value.strip():
             return []
         return list(value) if not isinstance(value, (str, bytes)) else [value]
+    
+    @field_validator("is_news", mode="before")
+    @classmethod
+    def _normalize_is_news(cls, value) -> bool:
+        """Accept booleans or Yes/No style strings from LLM output."""
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in {"yes", "true", "1"}:
+                return True
+            if normalised in {"no", "false", "0"}:
+                return False
+        return bool(value)
