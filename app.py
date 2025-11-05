@@ -66,19 +66,19 @@ async def analyze_url(
 
 @app.post("/classify/text", response_model=ClassificationResult)
 async def analyze_text(
-    text: str = Form(
+    text: str = Query(
         ...,
         min_length=20,
         max_length=100000,
         description="Plain-text contents of the article. Long inputs are auto-trimmed to control costs.",
     ),
-    title: Optional[str] = Form(
+    title: Optional[str] = Query(
         default=None,
         min_length=3,
         max_length=500,
         description="Optional headline for the article. Auto-derived from text when omitted.",
     ),
-    llm_timeout_seconds: Optional[float] = Form(
+    llm_timeout_seconds: Optional[float] = Query(
         default=None,
         ge=5.0,
         le=180.0,
