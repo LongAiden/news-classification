@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query
 
-from models import ClassificationResult
+from models import ClassificationResult, TextClassificationRequest
 from news_analyzer import NewsAnalyzer, get_analyzer, shutdown_analyzer
 
 
@@ -66,33 +66,12 @@ async def analyze_url(
 
 @app.post("/classify/text", response_model=ClassificationResult)
 async def analyze_text(
-    text: str = Query(
-        ...,
-        min_length=20,
-        max_length=100000,
-        description="Plain-text contents of the article. Long inputs are auto-trimmed to control costs.",
-    ),
-    title: Optional[str] = Query(
-        default=None,
-        min_length=3,
-        max_length=500,
-        description="Optional headline for the article. Auto-derived from text when omitted.",
-    ),
-    llm_timeout_seconds: Optional[float] = Query(
-        default=None,
-        ge=5.0,
-        le=180.0,
-        description="Override the default timeout (seconds) used for the LLM call.",
-    ),
+    request: TextClassificationRequest,
     analyzer: NewsAnalyzer = Depends(get_analyzer),
 ) -> ClassificationResult:
-    """Classify raw article text supplied directly by the caller."""
+    """Classify raw article text supplied directly by the caller via JSON body."""
     try:
-        return await analyzer.analyze_with_contents(
-            text=text,
-            title=title,
-            llm_timeout=llm_timeout_seconds,
-        )
+        return await analyzer.analyze_with_contents(request)
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except ValueError as exc:

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from pydantic_ai import Agent
 from pydantic_ai.models.google import GoogleModel, GoogleProvider
 
-from models import ClassificationResult
+from models import ClassificationResult, TextClassificationRequest
 
 load_dotenv()
 
@@ -275,11 +275,15 @@ class NewsAnalyzer:
             url,
             fetch_timeout=fetch_timeout,
         )
-        result = await self.analyze_with_contents(
+
+        # Create a TextClassificationRequest from the extracted data
+        request = TextClassificationRequest(
             text=text,
             title=title or str(url),
-            llm_timeout=llm_timeout,
+            llm_timeout_seconds=llm_timeout,
         )
+
+        result = await self.analyze_with_contents(request)
         result_payload = result.model_dump()
         result_payload.update(
             {
@@ -291,35 +295,11 @@ class NewsAnalyzer:
 
     async def analyze_with_contents(
         self,
-        text: str,
-        title: str | None = None,
-        *,
-        llm_timeout: Optional[float] = None,
+        request: TextClassificationRequest,
     ) -> ClassificationResult:
-        """Analyse raw article text supplied by the caller."""
-        # Validate inputs
-        text_stripped = text.strip() if text else ""
-        if len(text_stripped) < 20:
-            raise ValueError(
-                "Article text must be at least 20 characters. "
-                f"Received {len(text_stripped)} characters."
-            )
-
-        # Validate and clean title
-        if title:
-            title_stripped = title.strip()
-            if len(title_stripped) < 3:
-                logger.warning(
-                    "Title too short (%d chars), deriving from content",
-                    len(title_stripped)
-                )
-                title = None
-
-        cleaned_title = title.strip() if title else text_stripped.splitlines()[0][:120]
-        if not cleaned_title or len(cleaned_title) < 3:
-            cleaned_title = "Untitled article"
-
-        cleaned_text = self._clean_text(text_stripped)
+        """Analyse raw article text supplied by the caller via JSON body."""
+        # The TextClassificationRequest model already validates and cleans the inputs
+        cleaned_text = self._clean_text(request.text)
 
         if not cleaned_text or len(cleaned_text) < 20:
             raise ValueError(
@@ -329,8 +309,8 @@ class NewsAnalyzer:
 
         return await self.llm_analyzer(
             cleaned_text,
-            cleaned_title,
-            llm_timeout=llm_timeout,
+            request.title,
+            llm_timeout=request.llm_timeout_seconds,
         )
 
 

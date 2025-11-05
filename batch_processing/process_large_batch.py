@@ -240,6 +240,7 @@ async def process_with_realtime_api(
     - Can split across multiple days if daily limits apply
     """
     from news_analyzer import get_analyzer
+    from models import TextClassificationRequest
 
     print("=" * 80)
     print("PROCESSING WITH REAL-TIME API")
@@ -312,7 +313,12 @@ async def process_with_realtime_api(
         print(f"[{len(results) + 1}/{len(items)}] {item_id}...", end=" ")
 
         try:
-            result = await analyzer.analyze_with_contents(text=content, title=title)
+            # Create request object
+            request = TextClassificationRequest(
+                text=content,
+                title=title
+            )
+            result = await analyzer.analyze_with_contents(request)
 
             result_dict = result.model_dump()
             result_dict['original_id'] = item_id
