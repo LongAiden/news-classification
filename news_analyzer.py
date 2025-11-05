@@ -31,8 +31,8 @@ LLM_TIMEOUT_SECONDS = 30.0  # Reduced from 45s
 MAX_INPUT_CHARACTERS = 10000  # Reduced from 12,000 for faster LLM processing
 LLM_MODEL = "gemini-2.5-flash-lite"  # Faster experimental model with better performance
 BATCH_LIMIT = 500
-MAX_CONCURRENT_REQUESTS = 3  # Conservative for free tier (15 RPM limit)
-MIN_REQUEST_INTERVAL = 4.0  # Minimum seconds between requests (for free tier: 15 RPM = 4s interval)
+MAX_CONCURRENT_REQUESTS = 30  # Conservative for Tier 1 (4,000 RPM limit)
+MIN_REQUEST_INTERVAL = 0.05  # Minimum seconds between requests (Tier 1: 60 RPM = 1s interval)
 
 SYSTEM_PROMPT = """You are a professional news analyst specialising in financial and business reporting.
 Interpret the supplied article title and body, then populate the output schema exactly.
@@ -97,7 +97,7 @@ class NewsAnalyzer:
         self._llm_semaphore: Optional[asyncio.Semaphore] = None
         self._semaphore_lock = asyncio.Lock()
 
-        # Rate limiting for free tier
+        # Rate limiting for Tier 1
         self._last_request_time: float = 0.0
         self._rate_limit_lock = asyncio.Lock()
 
