@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from threading import Lock
 from typing import Optional, Tuple
 
@@ -27,10 +28,11 @@ DEFAULT_HEADERS = {
 }
 FETCH_TIMEOUT_SECONDS = 10.0  # Reduced from 20s
 LLM_TIMEOUT_SECONDS = 30.0  # Reduced from 45s
-MAX_INPUT_CHARACTERS = 8_000  # Reduced from 12,000 for faster LLM processing
+MAX_INPUT_CHARACTERS = 10000  # Reduced from 12,000 for faster LLM processing
 LLM_MODEL = "gemini-2.5-flash-lite"  # Faster experimental model with better performance
 BATCH_LIMIT = 500
-MAX_CONCURRENT_REQUESTS = 10  # Limit concurrent HTTP requests
+MAX_CONCURRENT_REQUESTS = 3  # Conservative for free tier (15 RPM limit)
+MIN_REQUEST_INTERVAL = 4.0  # Minimum seconds between requests (for free tier: 15 RPM = 4s interval)
 
 SYSTEM_PROMPT = """You are a professional news analyst specialising in financial and business reporting.
 Interpret the supplied article title and body, then populate the output schema exactly.
@@ -69,10 +71,12 @@ class NewsAnalyzer:
         max_input_chars: int = MAX_INPUT_CHARACTERS,
         fetch_timeout: float = FETCH_TIMEOUT_SECONDS,
         llm_timeout: float = LLM_TIMEOUT_SECONDS,
+        max_concurrent: int = MAX_CONCURRENT_REQUESTS,
     ) -> None:
         self.fetch_timeout = fetch_timeout
         self.llm_timeout = llm_timeout
         self.max_input_chars = max_input_chars
+        self.max_concurrent = max_concurrent
 
         self.provider = GoogleProvider(api_key=gemini_key)
         self.model = GoogleModel(LLM_MODEL, provider=self.provider)
@@ -89,11 +93,25 @@ class NewsAnalyzer:
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
 
-        logger.info("NewsAnalyzer ready with model %s", LLM_MODEL)
+        # Semaphore for concurrent request limiting
+        self._llm_semaphore: Optional[asyncio.Semaphore] = None
+        self._semaphore_lock = asyncio.Lock()
+
+        # Rate limiting for free tier
+        self._last_request_time: float = 0.0
+        self._rate_limit_lock = asyncio.Lock()
+
+        logger.info(
+            "NewsAnalyzer ready with model %s (max_concurrent=%d, rate_limit=%.1fs)",
+            LLM_MODEL,
+            max_concurrent,
+            MIN_REQUEST_INTERVAL
+        )
 
     async def start(self) -> None:
-        """Warm the HTTP client ahead of serving requests."""
+        """Warm the HTTP client and semaphore ahead of serving requests."""
         await self._get_http_client()
+        await self._get_semaphore()
 
     async def shutdown(self) -> None:
         """Tear down the shared HTTP client."""
@@ -113,6 +131,14 @@ class NewsAnalyzer:
                         timeout=timeout,
                     )
         return self._client
+
+    async def _get_semaphore(self) -> asyncio.Semaphore:
+        """Create (or return) a shared semaphore for rate limiting."""
+        if self._llm_semaphore is None:
+            async with self._semaphore_lock:
+                if self._llm_semaphore is None:
+                    self._llm_semaphore = asyncio.Semaphore(self.max_concurrent)
+        return self._llm_semaphore
 
     async def extract_url(
         self, url: str, fetch_timeout: Optional[float] = None
@@ -200,19 +226,35 @@ class NewsAnalyzer:
         payload = f"- Title: {title}\n- Contents: {contents}"
         timeout = llm_timeout or self.llm_timeout
 
-        try:
-            response = await asyncio.wait_for(
-                self.agent.run(payload),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            logger.error("LLM analysis timed out after %.1fs", timeout)
-            raise TimeoutError(
-                f"LLM analysis exceeded timeout of {timeout} seconds."
-            ) from exc
-        except Exception as exc:
-            logger.exception("Unexpected error during LLM analysis")
-            raise
+        # Use semaphore to limit concurrent API calls
+        semaphore = await self._get_semaphore()
+
+        async with semaphore:
+            # Rate limiting: ensure minimum interval between requests
+            async with self._rate_limit_lock:
+                current_time = time.time()
+                time_since_last = current_time - self._last_request_time
+
+                if time_since_last < MIN_REQUEST_INTERVAL:
+                    wait_time = MIN_REQUEST_INTERVAL - time_since_last
+                    logger.debug("Rate limiting: waiting %.2fs before next request", wait_time)
+                    await asyncio.sleep(wait_time)
+
+                self._last_request_time = time.time()
+
+            try:
+                response = await asyncio.wait_for(
+                    self.agent.run(payload),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                logger.error("LLM analysis timed out after %.1fs", timeout)
+                raise TimeoutError(
+                    f"LLM analysis exceeded timeout of {timeout} seconds."
+                ) from exc
+            except Exception as exc:
+                logger.exception("Unexpected error during LLM analysis")
+                raise
 
         result_data = response.output.model_dump()
         result_data.setdefault("page_title", title)
@@ -250,16 +292,40 @@ class NewsAnalyzer:
     async def analyze_with_contents(
         self,
         text: str,
-        title: str,
+        title: str | None = None,
         *,
         llm_timeout: Optional[float] = None,
     ) -> ClassificationResult:
         """Analyse raw article text supplied by the caller."""
-        cleaned_title = title.strip() or "Untitled article"
-        cleaned_text = self._clean_text(text)
+        # Validate inputs
+        text_stripped = text.strip() if text else ""
+        if len(text_stripped) < 20:
+            raise ValueError(
+                "Article text must be at least 20 characters. "
+                f"Received {len(text_stripped)} characters."
+            )
 
-        if not cleaned_text:
-            raise ValueError("Article text is empty or unreadable after cleaning.")
+        # Validate and clean title
+        if title:
+            title_stripped = title.strip()
+            if len(title_stripped) < 3:
+                logger.warning(
+                    "Title too short (%d chars), deriving from content",
+                    len(title_stripped)
+                )
+                title = None
+
+        cleaned_title = title.strip() if title else text_stripped.splitlines()[0][:120]
+        if not cleaned_title or len(cleaned_title) < 3:
+            cleaned_title = "Untitled article"
+
+        cleaned_text = self._clean_text(text_stripped)
+
+        if not cleaned_text or len(cleaned_text) < 20:
+            raise ValueError(
+                "Article text is empty or too short after cleaning. "
+                f"Cleaned length: {len(cleaned_text)}"
+            )
 
         return await self.llm_analyzer(
             cleaned_text,

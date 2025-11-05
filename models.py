@@ -39,15 +39,34 @@ class TextClassificationRequest(BaseModel):
     @field_validator("text")
     @classmethod
     def _strip_text(cls, value: str) -> str:
-        return value.strip()
+        stripped = value.strip()
+        # Check if text is meaningful (more than just whitespace or very short)
+        if len(stripped) < 20:
+            raise ValueError("Article text must be at least 20 characters long and contain meaningful content.")
+        return stripped
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _validate_title(cls, value):
+        """Validate title is meaningful."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            value = str(value)
+        stripped = value.strip()
+        # Return None if too short, will be auto-generated from text
+        return stripped if len(stripped) >= 3 else None
 
     @model_validator(mode="after")
     def _ensure_title(self):
         candidate = (self.title or "").strip()
-        if not candidate:
+        if not candidate or len(candidate) < 3:
             stripped = self.text.strip()
             if stripped:
-                candidate = stripped.splitlines()[0][:120]
+                candidate = stripped.splitlines()[0][:120].strip()
+                # Ensure the derived title is meaningful
+                if len(candidate) < 3:
+                    candidate = "Untitled article"
             else:
                 candidate = "Untitled article"
         self.title = candidate
@@ -63,8 +82,23 @@ class ClassificationResult(BaseModel):
         default=None, description="Original article URL when content was fetched remotely."
     )
     page_title: Optional[str] = Field(
-        default=None, description="Title inferred from the article or provided by the caller."
+        default=None,
+        min_length=3,
+        description="Title inferred from the article or provided by the caller."
     )
+
+    @field_validator("page_title", mode="before")
+    @classmethod
+    def _validate_page_title(cls, value):
+        """Ensure page_title is a valid string, not a type object."""
+        if value is None:
+            return None
+        if isinstance(value, type):
+            return None
+        if not isinstance(value, str):
+            return str(value) if value else None
+        stripped = value.strip()
+        return stripped if len(stripped) >= 3 else None
     is_financial: bool = Field(
         ..., description="True when the article is related to finance, business, or markets."
     )
@@ -86,8 +120,36 @@ class ClassificationResult(BaseModel):
     sentiment: Literal["Negative", "Neutral", "Positive"] = Field(
         ..., description="Overall sentiment classification."
     )
-    summary_en: str = Field(..., description="Two to three sentence English summary.")
-    summary_tr: str = Field(..., description="Two to three sentence Turkish summary.")
+    summary_en: str = Field(
+        ...,
+        min_length=20,
+        description="Two to three sentence English summary."
+    )
+    summary_tr: str = Field(
+        ...,
+        min_length=20,
+        description="Two to three sentence Turkish summary."
+    )
+
+    @field_validator("summary_en", "summary_tr", mode="before")
+    @classmethod
+    def _validate_summaries(cls, value):
+        """Ensure summaries are meaningful and not truncated."""
+        if not isinstance(value, str):
+            return str(value) if value else "Summary not available."
+
+        stripped = value.strip()
+
+        # Reject if too short or clearly truncated
+        if len(stripped) < 20:
+            return "Summary not available."
+
+        # Check if summary ends abruptly (no punctuation)
+        if stripped and stripped[-1] not in '.!?':
+            # Add period to complete the sentence
+            stripped += "."
+
+        return stripped
     extracted_characters: int = Field(
         default=0,
         ge=0,
