@@ -12,7 +12,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from pydantic_ai import Agent
-from pydantic_ai.models.google import GoogleModel, GoogleProvider
+from pydantic_ai.models.google import GoogleModel
 
 from models import ClassificationResult, TextClassificationRequest
 
@@ -149,8 +149,10 @@ class NewsAnalyzer:
         self.max_input_chars = max_input_chars
         self.max_concurrent = max_concurrent
 
-        self.provider = GoogleProvider(api_key=gemini_key)
-        self.model = GoogleModel(LLM_MODEL, provider=self.provider)
+        # Set API key as environment variable for GoogleModel
+        os.environ['GOOGLE_API_KEY'] = gemini_key
+
+        self.model = GoogleModel(LLM_MODEL)
         self.agent = Agent(
             self.model,
             output_type=ClassificationResult,
@@ -159,6 +161,7 @@ class NewsAnalyzer:
                 "max_tokens": 2048,  # Reduced from 2048 for faster responses
                 "temperature": 0.3,  # Lower temperature = faster, more deterministic
             },
+            retries=3,  # Increase from default 1 to 3 for production reliability
         )
 
         self._client: Optional[httpx.AsyncClient] = None
