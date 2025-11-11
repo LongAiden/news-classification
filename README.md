@@ -74,7 +74,40 @@ result = await analyzer.analyze_with_contents(title="...", text="...")
 
 See [LIBRARY_USAGE.md](LIBRARY_USAGE.md) for complete examples and [example_library_usage.py](example_library_usage.py) for runnable demos.
 
-## 7. Troubleshooting
+## 7. Integration Testing
+
+A comprehensive integration test suite is available to validate all API endpoints:
+
+```bash
+# From TeamHanoi project root
+./test-news-classification.sh all
+
+# Or run individual phases
+./test-news-classification.sh phase0  # Pre-flight checks
+./test-news-classification.sh phase1  # Real-time API testing
+./test-news-classification.sh phase2  # Error handling
+./test-news-classification.sh phase3  # Database integration
+```
+
+**Test Coverage:**
+- ✅ Health endpoint validation
+- ✅ POST /classify/text with schema validation
+- ✅ Response time tracking (< 30s threshold)
+- ✅ Error handling (422 validation errors)
+- ✅ Database integration (Supabase storage, RLS policies)
+- ✅ Pydantic model validation (confident_score range, sentiment values)
+
+**Requirements:**
+- Docker container running: `docker ps | grep teamhanoi_news_classification`
+- Environment variables: `GOOGLE_API_KEY`, `SUPABASE_ANON_KEY`
+- Local Supabase: `npx supabase start` (from project root)
+
+**Test Results:**
+- Logs saved to `test-results/news_classification_test_*.log`
+- Color-coded output (green=pass, red=fail, yellow=warning)
+- All phases must pass for 100% success
+
+## 8. Troubleshooting
 - 504 errors indicate the fetch or LLM timeout was reached; increase the relevant timeout or inspect logs.
 - 422 errors mean no readable text was extracted—verify the URL is public or strip HTML from custom payloads.
 - Inspect `logs/` for detailed traces; adjust logging in `news_analyzer.py` if you need more verbosity.
