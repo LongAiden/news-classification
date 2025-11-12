@@ -154,10 +154,10 @@ Return JSON with entities array following the EntityExtractionResult schema.
         )
 
         logger.info(
-            f"Extracted {len(result.data.entities)} entities from article: {title[:50]}"
+            f"Extracted {len(result.output.entities)} entities from article: {title[:50]}"
         )
 
-        return result.data
+        return result.output
 
     except Exception as e:
         logger.error(f"Entity extraction failed for article '{title[:50]}': {e}")
