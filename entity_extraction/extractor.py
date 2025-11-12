@@ -140,8 +140,8 @@ Return JSON with entities array following the EntityExtractionResult schema.
     model = GoogleModel(LLM_MODEL, provider=provider)
     agent: Agent[None, EntityExtractionResult] = Agent(
         model=model,
-        result_type=EntityExtractionResult,
-        system_prompt=ENTITY_EXTRACTION_PROMPT,
+        output_type=EntityExtractionResult,  # Changed from result_type to output_type
+        instructions=ENTITY_EXTRACTION_PROMPT,  # Changed from system_prompt to instructions
     )
 
     # Run extraction with timeout
