@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
 
 load_dotenv()
 
@@ -134,7 +135,9 @@ Return JSON with entities array following the EntityExtractionResult schema.
     if not google_api_key:
         raise ValueError("GOOGLE_API_KEY environment variable not set")
 
-    model = GoogleModel(LLM_MODEL, api_key=google_api_key)
+    # Pass api_key via GoogleProvider (Pydantic AI v0.0.14+ requirement)
+    provider = GoogleProvider(api_key=google_api_key)
+    model = GoogleModel(LLM_MODEL, provider=provider)
     agent: Agent[None, EntityExtractionResult] = Agent(
         model=model,
         result_type=EntityExtractionResult,
