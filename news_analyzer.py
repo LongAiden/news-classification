@@ -62,7 +62,10 @@ IF THE CONTENT IS NOT NEWS, immediately return this EXACT JSON structure:
   "confident_score": 0.0,
   "summary_en": "No Value",
   "summary_tr": "No Value",
-  "summary_kr": "No Value"
+  "summary_kr": "No Value",
+  "title_en": "No Value",
+  "title_tr": "No Value",
+  "title_kr": "No Value"
 }
 
 IMPORTANT: Use Python-style booleans (True/False with capital T/F). Do NOT summarize non-news content.
@@ -119,13 +122,25 @@ For legitimate news articles, populate ALL fields:
     → 2-3 sentence Korean summary (50-100 words)
     → Complete sentences only
 
+11. title_en
+    → Translate the article title to English
+    → Keep it concise and accurate
+
+12. title_tr
+    → Translate the article title to Turkish
+    → Keep it concise and accurate
+
+13. title_kr
+    → Translate the article title to Korean
+    → Keep it concise and accurate
+
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
 ✓ ALWAYS provide ALL fields - never omit any field
 ✓ Use Python-style booleans: True/False (with capital T/F)
-✓ For non-news: is_news=False, is_financial=False, confident_score=0.0, all summaries="No Value", empty lists
+✓ For non-news: is_news=False, is_financial=False, confident_score=0.0, all summaries="No Value", all titles="No Value", empty lists
 ✓ For news: is_news=True, confident_score=1.0-10.0 based on quality
 ✓ Respond ONLY with valid JSON - no additional text or commentary"""
 

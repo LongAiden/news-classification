@@ -121,6 +121,22 @@ class ClassificationResult(BaseModel):
         description="Two to three sentence Korean summary, or 'No Value' for non-news content."
     )
 
+    title_en: str = Field(
+        ...,
+        min_length=3,
+        description="English title translation, or 'No Value' for non-news content."
+    )
+    title_tr: str = Field(
+        ...,
+        min_length=3,
+        description="Turkish title translation, or 'No Value' for non-news content."
+    )
+    title_kr: str = Field(
+        ...,
+        min_length=3,
+        description="Korean title translation, or 'No Value' for non-news content."
+    )
+
     is_news: bool = Field(
         ..., description="True when the article is news."
     )
@@ -166,6 +182,26 @@ class ClassificationResult(BaseModel):
             stripped += "."
 
         return stripped
+
+    @field_validator("title_en", "title_tr", "title_kr", mode="before")
+    @classmethod
+    def _validate_titles(cls, value):
+        """Ensure titles are meaningful, or 'No Value' for non-news."""
+        if not isinstance(value, str):
+            return str(value) if value else "No Value"
+
+        stripped = value.strip()
+
+        # Allow "No Value" for non-news content
+        if stripped == "No Value":
+            return stripped
+
+        # Reject if too short
+        if len(stripped) < 3:
+            return "No Value"
+
+        return stripped
+
     extracted_characters: int = Field(
         default=0,
         ge=0,
